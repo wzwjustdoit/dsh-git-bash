@@ -83,15 +83,18 @@ const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 
 // Keep the field schema permissive enough to render a recovery card for a
 // legacy bad value; resolveConfiguredExecutable enforces it on new writes and use.
-export const Config = z.intersect([
-  LOCAL_BASH_CONFIG,
-  z.object({
-    executable: z.string()
-      .default("")
-      .role("path")
-      .description("Absolute path to Git for Windows bash.exe; blank uses automatic discovery."),
-  }),
-]) as z<Config>;
+//
+// Extend the base schema with `set` rather than `z.intersect`: intersect rebuilds
+// the object and drops the inherited `volatile` metadata, which the host needs to
+// parse a live config section (otherwise the first command fails with
+// "config.timeoutMs.get is not a function").
+export const Config = LOCAL_BASH_CONFIG.set(
+  "executable",
+  z.string()
+    .default("")
+    .role("path")
+    .description("Absolute path to Git for Windows bash.exe; blank uses automatic discovery."),
+) as z<Config>;
 
 function resolveConfiguredExecutable(config: Config): string | undefined {
   const executable = config.executable?.trim();
