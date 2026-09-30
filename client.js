@@ -636,18 +636,24 @@ window.__ModuleLoader__.load({
       // The configurable settings tab collects namespaces from raw keyed entries, so
       // shadowed cards (same key, different priority) yield duplicate namespaces.
       installSettingsNamespaceDedupe(ctx);
-      const scope = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE });
-      ctx.slots.inject(SETTINGS_SLOT, () => ctx.slots.register({
-        name: SETTINGS_SLOT,
-        key: SETTINGS_NAMESPACE,
-        priority: PRIORITY,
-        locale: LOCALE_NAMESPACE,
-        inject: () => ({
-          scope,
-          pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
-          t,
-        }),
-      }, GitBashSettingsCard));
+      // DSH 0.2 dropped the `settingsScope` service. Register the configuration
+      // card only when the host still exposes it; the Bash terminal row below is
+      // independent of settings, so the entry activates either way.
+      const settingsScope = ctx.get("settingsScope");
+      if (settingsScope !== undefined) {
+        const scope = settingsScope.bind({ namespace: SETTINGS_NAMESPACE });
+        ctx.slots.inject(SETTINGS_SLOT, () => ctx.slots.register({
+          name: SETTINGS_SLOT,
+          key: SETTINGS_NAMESPACE,
+          priority: PRIORITY,
+          locale: LOCALE_NAMESPACE,
+          inject: () => ({
+            scope,
+            pickDirectory: () => ctx.uiWorkspace.pickDirectory(),
+            t,
+          }),
+        }, GitBashSettingsCard));
+      }
 
       ctx.slots.inject(SLOT, () => {
         const original = ctx.slots.entries(SLOT)
@@ -674,10 +680,13 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // `settingsScope` is intentionally absent: DSH 0.2 removed that service, and
+    // listing it here keeps the whole client entry pending forever (the host
+    // reports "1 entry did not activate"). The settings card wiring below probes
+    // for it at runtime instead.
     const inject = [
       "slots",
       "locale",
-      "settingsScope",
       "connection",
       "remote",
       "uiWorkspace",
