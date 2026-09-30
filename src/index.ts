@@ -1,8 +1,5 @@
 import type { Context } from "@deepseek-ai/cordis";
-import {
-  assertServiceableBashConfig,
-  LocalBashExecutor,
-} from "@deepseek-ai/dsh-bash-local";
+import { LocalBashExecutor } from "@deepseek-ai/dsh-bash-local";
 import type { Config as LocalBashConfig } from "@deepseek-ai/dsh-bash-local";
 import { SandboxUnavailableError } from "@deepseek-ai/dsh-sandbox";
 import type {
@@ -15,12 +12,12 @@ import type {
   SandboxPolicy,
 } from "@deepseek-ai/dsh-sandbox";
 import type {} from "@deepseek-ai/dsh-sandbox-policy";
-import {
-  SHELL_SETTINGS_NAMESPACE,
-  type ShellExecRequest,
-  type ShellExecSpec,
-  type ShellProcess,
-  type ShellRunResult,
+import type {
+  ShellExecRequest,
+  ShellExecSpec,
+  ShellExecution,
+  ShellProcess,
+  ShellRunResult,
 } from "@deepseek-ai/dsh-shell";
 import z from "@deepseek-ai/schemastery";
 import { spawnSync } from "node:child_process";
@@ -84,24 +81,6 @@ export interface Config extends LocalBashConfig {
 
 const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 
-type ResolvedGitBashConfig = Required<Omit<Config, "cwd">> & Pick<Config, "cwd">;
-
-interface SettingsSectionHooks<T> {
-  setSource(current: () => T): void;
-  onChange(): void;
-  validate?(value: T): void;
-}
-
-interface SettingsProviderService {
-  installSection<const Namespace extends string, T>(
-    owner: Context,
-    ns: Namespace,
-    schema: z<T>,
-    entry: T,
-    hooks: SettingsSectionHooks<T>,
-  ): void;
-}
-
 // Keep the field schema permissive enough to render a recovery card for a
 // legacy bad value; resolveConfiguredExecutable enforces it on new writes and use.
 export const Config = z.intersect([
@@ -125,21 +104,9 @@ function resolveConfiguredExecutable(config: Config): string | undefined {
   return resolveGitBashPath(executable);
 }
 
-function createSettingsValidator(): (config: Config) => void {
-  let initialSection = true;
-  return (config) => {
-    assertServiceableBashConfig(config);
-    if (initialSection) {
-      initialSection = false;
-      return;
-    }
-    resolveConfiguredExecutable(config);
-  };
-}
-
 function checkedCompositionConfig(config: Config): Config {
-  // Blank configuration intentionally defers auto-discovery so the settings
-  // card remains available on hosts that still need Git for Windows configured.
+  // Blank configuration intentionally defers auto-discovery so the host still
+  // composes when Git for Windows is not installed yet.
   resolveConfiguredExecutable(config);
   return config;
 }
@@ -213,7 +180,8 @@ function classifyRunnerFailure(
   exitCode: number | null,
   stderr: string,
   rules: readonly RunnerFailureRule[],
-): RunnerFailureMatch | undefined {  if (exitCode === null || exitCode === 0) return undefined;
+): RunnerFailureMatch | undefined {
+  if (exitCode === null || exitCode === 0) return undefined;
   const lines = stderr.split(/\r?\n/);
   for (const rule of rules) {
     if (rule.allowedExitCodes !== undefined && !rule.allowedExitCodes.includes(exitCode)) {
@@ -259,38 +227,28 @@ function assertNativeGuard(mode: ConfinedSandboxMode): void {
 }
 
 // DSH shell executor backed by Git for Windows Bash.
+//
+// The host interface is `execute(spec)`: a subclass replaces the public
+// command's `bash -c` argv at the execution boundary through `executeArgv`,
+// and stamps settlement facts in `onProcessDone`. There is no separate
+// foreground/background entry point to override — "foreground" is decided by
+// whether the caller awaits the returned handle's `result()`.
 export class GitBashExecutor extends LocalBashExecutor {
-  static inject = ["subprocess", "sandbox", "sandboxPolicy"];
-  static Config = Config;
+  static override inject = ["subprocess", "sandbox", "sandboxPolicy"];
+  // The extended schema adds `executable`; the static-side cast keeps this
+  // subclass assignable to the host's base class, while the runtime schema the
+  // host actually parses stays the intersected one.
+  static override Config = Config as unknown as typeof LocalBashExecutor.Config;
 
-  private configSource!: () => ResolvedGitBashConfig;
   private executableCache: { configured: string; resolved: string } | undefined;
   private readonly mode: SandboxMode;
   private readonly processFacts = new Map<ShellProcess, ProcessFacts>();
 
   constructor(ctx: Context, config: Config) {
-    // Keep the inherited process mechanics while replacing its fixed settings
-    // registration with the extended, executable-aware section below. The
-    // base registers inside an isolated settings realm so only the extended
-    // section is visible to the real settings provider.
-    super(ctx.isolate("settings"), checkedCompositionConfig(config));
-    const entry = config as ResolvedGitBashConfig;
-    this.configSource = () => entry;
-    ctx.inject(["settings"], (settingsCtx) => {
-      const settings = settingsCtx.get("settings", true) as SettingsProviderService;
-      settings.installSection(ctx, SHELL_SETTINGS_NAMESPACE, Config, entry, {
-        validate: createSettingsValidator(),
-        setSource: (current) => {
-          this.configSource = () => current() as ResolvedGitBashConfig;
-        },
-        onChange: () => {},
-      });
-    });
+    // The host owns shell settings; this executor only resolves and validates
+    // its composition config (including the executable-aware extension).
+    super(ctx, checkedCompositionConfig(config));
     this.mode = ctx.sandboxPolicy.defaultMode;
-  }
-
-  override get config(): ResolvedGitBashConfig {
-    return this.configSource();
   }
 
   get executable(): string {
@@ -339,11 +297,19 @@ export class GitBashExecutor extends LocalBashExecutor {
     return spec.sandboxPolicy;
   }
 
-  private async confine(command: string, policy: SandboxPolicy): Promise<ConfinedArgv> {
+  private async confine(
+    command: string,
+    policy: SandboxPolicy,
+    signal?: AbortSignal,
+  ): Promise<ConfinedArgv> {
     this.ensureServerDaclNormalized();
-    // The sandbox seam's confine() is async (Promise<ConfinedArgv>); await it
-    // before spreading so the runner-failure rules extend the resolved wrap.
-    const confined = await this.ctx.sandbox.confine(this.guardedArgv(command, policy.mode), policy);
+    // `ctx.sandbox.confine` is async; await it before spreading so the
+    // runner-failure rules extend the resolved wrap rather than a promise.
+    const confined = await this.ctx.sandbox.confine(
+      this.guardedArgv(command, policy.mode),
+      policy,
+      signal,
+    );
     return {
       ...confined,
       runnerFailureRules: [...confined.runnerFailureRules, GUARD_FAILURE_RULE],
@@ -358,90 +324,109 @@ export class GitBashExecutor extends LocalBashExecutor {
     normalizeServerDefaultDacl();
   }
 
-  override async run(spec: ShellExecSpec): Promise<ShellRunResult> {
+  override async execute(spec: ShellExecSpec): Promise<ShellExecution> {
     const policy = this.policy(spec);
     const { mode } = policy;
+
     if (mode === "danger-full-access") {
-      const { result } = await this.runArgv(spec, this.argv(spec.command));
-      return {
+      const execution = await super.execute(spec);
+      return GitBashExecutor.decorateResult(execution, (result) => ({
         ...result,
         sandbox: { mode, denied: false },
-      };
+      }));
     }
 
-    const confined = await this.confine(spec.command, { ...policy, mode });
-    let result: ShellRunResult;
-    let spawnRequested: boolean;
-    try {
-      ({ result, spawnRequested } = await this.runArgv(spec, confined.argv));
-    } catch (error) {
-      if (spec.signal?.aborted === true) spec.signal.throwIfAborted();
-      if (isRunnerSpawnFailure(error, confined.argv[0], spec.workdir)) {
-        throw new SandboxUnavailableError(mode, String(error));
-      }
-      throw error;
-    }
-    if (!spawnRequested) {
-      return { ...result, sandbox: { mode, denied: false } };
-    }
-
-    const runnerFailure = classifyRunnerFailure(
-      result.exitCode,
-      result.stderr.text,
-      confined.runnerFailureRules,
-    );
-    if (runnerFailure !== undefined) {
-      throw new SandboxUnavailableError(mode, describeGuardFailure(runnerFailure.detail));
-    }
-    return {
-      ...result,
-      sandbox: {
-        mode,
-        denied: classifyDenial(result, confined.denialSignatures),
-        enforcement: confined.enforcement,
+    let confined: ConfinedArgv | undefined;
+    const execution = await this.executeArgv(
+      spec,
+      async (signal) => {
+        const prepared = await this.confine(spec.command, { ...policy, mode }, signal);
+        signal.throwIfAborted();
+        confined = prepared;
+        return prepared.argv;
       },
+      (process) => {
+        const facts = confined;
+        if (facts === undefined) return;
+        this.processFacts.set(process, {
+          mode,
+          enforcement: facts.enforcement,
+          denialSignatures: facts.denialSignatures,
+          runnerFailureRules: facts.runnerFailureRules,
+          runnerProgram: facts.argv[0],
+          workdir: spec.workdir,
+        });
+      },
+    );
+
+    return GitBashExecutor.decorateResult(
+      execution,
+      (result) => {
+        if (confined === undefined) {
+          return { ...result, sandbox: { mode, denied: false } };
+        }
+        const runnerFailure = classifyRunnerFailure(
+          result.exitCode,
+          result.stderr.text,
+          confined.runnerFailureRules,
+        );
+        if (runnerFailure !== undefined) {
+          throw new SandboxUnavailableError(mode, describeGuardFailure(runnerFailure.detail));
+        }
+        return {
+          ...result,
+          sandbox: {
+            mode,
+            denied: classifyDenial(result, confined.denialSignatures),
+            enforcement: confined.enforcement,
+          },
+        };
+      },
+      (error) => {
+        if (spec.signal?.aborted === true) spec.signal.throwIfAborted();
+        if (confined !== undefined && isRunnerSpawnFailure(error, confined.argv[0], spec.workdir)) {
+          throw new SandboxUnavailableError(mode, String(error));
+        }
+        throw error;
+      },
+    );
+  }
+
+  /**
+   * Decorate the handle's foreground projection in place, memoized once. The
+   * handle keeps its identity (never wrapped in a second object) because the
+   * per-process facts and `onProcessDone` key on the exact instance.
+   */
+  private static decorateResult(
+    execution: ShellExecution,
+    map: (result: ShellRunResult) => ShellRunResult,
+    mapError?: (error: unknown) => never,
+  ): ShellExecution {
+    const base = execution.result.bind(execution);
+    let decorated: Promise<ShellRunResult> | undefined;
+    execution.result = () => {
+      decorated ??= mapError === undefined ? base().then(map) : base().then(map, mapError);
+      return decorated;
     };
+    return execution;
   }
 
-  override async start(spec: ShellExecSpec): Promise<ShellProcess> {
-    const policy = this.policy(spec);
-    const { mode } = policy;
-    if (mode === "danger-full-access") {
-      return this.startArgv(spec, this.argv(spec.command));
-    }
-
-    const confined = await this.confine(spec.command, { ...policy, mode });
-    let proc: ShellProcess;
-    try {
-      proc = this.startArgv(spec, confined.argv);
-    } catch (error) {
-      if (isRunnerSpawnFailure(error, confined.argv[0], spec.workdir)) {
-        throw new SandboxUnavailableError(mode, String(error));
-      }
-      throw error;
-    }
-    this.processFacts.set(proc, {
-      mode,
-      enforcement: confined.enforcement,
-      denialSignatures: confined.denialSignatures,
-      runnerFailureRules: confined.runnerFailureRules,
-      runnerProgram: confined.argv[0],
-      workdir: spec.workdir,
-    });
-    return proc;
-  }
-
+  /**
+   * Stamp per-process sandbox facts before `done` settles. Full-access
+   * processes carry no facts; provider rejections are classified as runner
+   * failures rather than denials.
+   */
   protected override onProcessDone(
     proc: ShellProcess,
     stderr: string,
-    spawnFailed: boolean,
-    spawnError?: unknown,
+    providerRejected: boolean,
+    providerError?: unknown,
   ): void {
     const facts = this.processFacts.get(proc);
     if (facts !== undefined) {
       this.processFacts.delete(proc);
-      const runnerFailed = spawnFailed
-        ? isRunnerSpawnFailure(spawnError, facts.runnerProgram, facts.workdir)
+      const runnerFailed = providerRejected
+        ? isRunnerSpawnFailure(providerError, facts.runnerProgram, facts.workdir)
         : classifyRunnerFailure(proc.exitCode, stderr, facts.runnerFailureRules) !== undefined;
       proc.sandbox = {
         mode: facts.mode,
@@ -454,7 +439,7 @@ export class GitBashExecutor extends LocalBashExecutor {
         ...(runnerFailed ? { runnerFailed } : {}),
       };
     }
-    super.onProcessDone(proc, stderr, spawnFailed, spawnError);
+    super.onProcessDone(proc, stderr, providerRejected, providerError);
   }
 }
 
