@@ -6,7 +6,7 @@ set "THE_SH_FILE_2=%THE_SH_FILE:\=/%"
 
 if not defined DSH_GIT_BASH_PATH (
     echo [dsh.desktop.startup.gitbash.bat]  the env var  DSH_GIT_BASH_PATH  is not defined.
-    echo [dsh.desktop.startup.gitbash.bat]  set it to your own Git for Windows bash.exe.
+    echo [dsh.desktop.startup.gitbash.bat]  REQUIRED: You MUST manually set env var  DSH_GIT_BASH_PATH  to your Git for Windows bash.exe, e.g. C:\Program Files\Git\bin\bash.exe
     exit /b 1
 )
 if not exist "%DSH_GIT_BASH_PATH%" (
