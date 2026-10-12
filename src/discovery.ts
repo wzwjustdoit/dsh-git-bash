@@ -7,10 +7,10 @@ import {
 import { win32 } from "node:path";
 
 export const GIT_BASH_PATH_ENV = "DSH_GIT_BASH_PATH";
-// The dedicated runtime for the confined modes. Its MSYS named-object hash
-// must differ from the unconfined one, so a Low-integrity child can create its
-// own `\BaseNamedObjects\msys-2.0S5-<hash>` instead of opening an existing
-// Medium-labelled object (see README's "两个运行时" section).
+// The Git installation the confined modes use. Its MSYS named-object hash must
+// differ from the unconfined one's, so a Low-integrity child can create its own
+// `\BaseNamedObjects\msys-2.0S5-<hash>` instead of opening an existing
+// Medium-labelled object (see README's "两个环境变量的分工" section).
 export const GIT_BASH_PATH_CONFINED_ENV = "DSH_GIT_BASH_PATH_CONFINED";
 
 export interface GitBashDiscoveryOptions {

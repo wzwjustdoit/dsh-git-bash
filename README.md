@@ -59,9 +59,16 @@ DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 
 该模式不经过 native guard，也不进入 sandbox，直接以正常权限运行 Git Bash。它使用 `DSH_GIT_BASH_PATH`（不读取 `DSH_GIT_BASH_PATH_CONFINED`）——见[两个环境变量的分工](#两个环境变量的分工重要)。
 
-## 配置 Git Bash 路径
+## 配置与启动
 
-插件会自动探测 Program Files、用户安装目录和 Scoop 中的 Git Bash。Web GUI 中打开 `设置 -> 插件 -> 插件配置`，展开 `Git Bash` 卡片后可以直接输入 `bash.exe` 路径，或通过 `选择 Git 安装目录` 调用系统路径选择窗口。保存后，后续 Bash 命令会立即使用新路径；恢复默认值会回到 profile 配置或自动探测结果。
+插件会自动探测 Program Files、用户安装目录、Scoop、`GIT_INSTALL_ROOT` 以及 `PATH` 中的 Git Bash。Web GUI 中打开 `设置 -> 插件 -> 插件配置`，展开 `Git Bash` 卡片，可以看到**两个**路径字段：
+
+| 卡片字段 | 对应配置 | 对应环境变量 |
+| --- | --- | --- |
+| Git Bash 可执行文件（启动脚本 / danger-full-access） | `executable` | `DSH_GIT_BASH_PATH` |
+| Git Bash 可执行文件（read-only / workspace-write） | `confinedExecutable` | `DSH_GIT_BASH_PATH_CONFINED` |
+
+每个字段都可以直接输入 `bash.exe` 路径，或通过 `选择 Git 安装目录` 调用系统路径选择窗口。保存后，后续 Bash 命令会立即使用新路径；恢复默认值会回到 profile 配置或自动探测结果。
 
 ### 两个环境变量的分工（重要）
 
@@ -69,10 +76,12 @@ DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 
 | 环境变量 | 服务的场景 | 推荐配置 |
 | --- | --- | --- |
-| `DSH_GIT_BASH_PATH` | 启动 `dsh web` 的启动脚本、以及 `danger-full-access` 模式 | 你自己日常使用的那份 Git for Windows |
+| `DSH_GIT_BASH_PATH` | 启动脚本（`dsh web` / DSH desktop）、以及 `danger-full-access` 模式 | 你自己日常使用的那份 Git for Windows |
 | `DSH_GIT_BASH_PATH_CONFINED` | `read-only`、`workspace-write` 模式 | 另一份**单独**的 Git for Windows（如 PortableGit 解压版），只用于受限模式 |
 
 **为什么受限模式要用另一份：** `danger-full-access` 以正常（Medium）完整性运行，会让 MSYS2 在 `\BaseNamedObjects` 下创建 `msys-2.0S5-<安装路径哈希>`；受限模式的子进程被降到 Low 完整性，**无法打开**已存在的 Medium 对象。只要两份 Git 的安装路径不同，哈希就不同，两者各自创建各自的共享对象，互不干扰。若两份指向同一安装，受限模式会在 `danger-full-access` 运行期间报 `0xC0000022`。
+
+**典型症状：** 受限模式下命令退出码为 127、且 stderr 出现 `NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-…): 0xC0000022`，通常就是两个变量指向了同一份 Git（或在受限模式运行期间有非沙箱 MSYS 进程持有它）。
 
 **注意事项（请务必阅读）：**
 
@@ -81,11 +90,11 @@ DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 3. **`DSH_GIT_BASH_PATH_CONFINED` 的那份 Git 建议只由插件使用。** 不要手动打开它并保持运行，也不要用它启动 `dsh web`。
 4. 两份都可以是 Git for Windows（不必是不同版本）。
 
-未设置 `DSH_GIT_BASH_PATH_CONFINED` 时，受限模式回落到 `DSH_GIT_BASH_PATH` 与自动探测，行为与旧版本一致（但在 `danger-full-access` 与受限模式混用同一份 Git 时，可能遇到上面描述的问题）。
+未设置 `DSH_GIT_BASH_PATH_CONFINED` 时，受限模式回落到 `DSH_GIT_BASH_PATH` 与自动探测，行为与旧版本一致（此时两个用途共用一份 Git，可能遇到上面描述的问题）。
 
 ### 启动方式（重要）
 
-**强烈建议用本仓库提供的启动脚本启动 `dsh web`。** 原因：DSH 的 Windows ACL sandbox 需要 server 进程 token 的 default DACL 含当前用户 SID；由 `explorer.exe` / `cmd.exe` 直接派生的进程往往不含，会导致受限模式全部 `exit 125`。经 Git Bash 启动可以让 MSYS2 把 DACL 重置为含用户 SID 的标准形状。
+**强烈建议用本仓库提供的启动脚本启动 DSH。** 原因：DSH 的 Windows ACL sandbox 需要主进程 token 的 default DACL 含当前用户 SID；由 `explorer.exe` / `cmd.exe` 直接派生的进程往往不含，会导致受限模式全部 `exit 125`（`dsh web`）或直接崩溃（DSH desktop）。经 Git Bash 启动可以让 MSYS2 把 DACL 重置为含用户 SID 的标准形状。
 
 本仓库提供两套启动脚本，按你运行的形态选择：
 
@@ -101,7 +110,11 @@ scripts/dsh.desktop.startup/        # DSH desktop（Electron GUI）
 └── dsh.desktop.startup.gitbash.sh
 ```
 
-用法：把对应的整个目录**复制到任意位置**，按需设置 `DSH_GIT_BASH_PATH`（指向你日常的 Git Bash），然后双击 `.bat`，或把 `.vbs` 的快捷方式放进"启动"文件夹。desktop 形态还需要按安装位置设置 `DSH_DESKTOP_EXE`（详见该目录的 README）。
+用法：
+
+1. 把对应的**整个目录**复制到任意位置（脚本内部按相对路径互相引用，可整体移动）。
+2. 设置 `DSH_GIT_BASH_PATH`，指向你日常使用的 Git for Windows 的 `bash.exe`。用 DSH desktop 时，再按安装位置设置 `DSH_DESKTOP_EXE`（缺省指向 `Program Files`，详见该目录的 README）。
+3. 双击 `*.bat` 前台启动；开机自启则把 `*.vbs` 的快捷方式放进"启动"文件夹。
 
 ### 无 GUI / 手动配置
 
