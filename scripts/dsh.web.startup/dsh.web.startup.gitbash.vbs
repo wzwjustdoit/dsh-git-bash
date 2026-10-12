@@ -1,5 +1,5 @@
 ' 隐藏窗口地启动 dsh web: 解析本脚本所在目录, 再调用同目录的 .bat。
-' 这样整个 scripts/web-startup 目录可以整体复制到任意位置使用。
+' 这样整个 scripts/dsh.web.startup 目录可以整体复制到任意位置使用。
 Option Explicit
 
 Dim fso, scriptDir, batPath, shell

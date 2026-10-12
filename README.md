@@ -87,16 +87,21 @@ DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 
 **强烈建议用本仓库提供的启动脚本启动 `dsh web`。** 原因：DSH 的 Windows ACL sandbox 需要 server 进程 token 的 default DACL 含当前用户 SID；由 `explorer.exe` / `cmd.exe` 直接派生的进程往往不含，会导致受限模式全部 `exit 125`。经 Git Bash 启动可以让 MSYS2 把 DACL 重置为含用户 SID 的标准形状。
 
-启动脚本位于 [`scripts/web-startup/`](scripts/web-startup/)：
+本仓库提供两套启动脚本，按你运行的形态选择：
 
 ```text
-scripts/web-startup/
-├── dsh.web.startup.gitbash.vbs   # 隐藏窗口启动（推荐加入"启动"文件夹实现开机自启）
-├── dsh.web.startup.gitbash.bat   # 前台启动 / 排查问题
-└── dsh.web.startup.gitbash.sh    # 实际逻辑（由 .bat 调用）
+scripts/dsh.web.startup/            # dsh web（对应 DSH_WEB_* / 端口）
+├── dsh.web.startup.gitbash.vbs
+├── dsh.web.startup.gitbash.bat
+└── dsh.web.startup.gitbash.sh
+
+scripts/dsh.desktop.startup/        # DSH desktop（Electron GUI）
+├── dsh.desktop.startup.gitbash.vbs
+├── dsh.desktop.startup.gitbash.bat
+└── dsh.desktop.startup.gitbash.sh
 ```
 
-用法：把 `scripts/web-startup/` 整个目录**复制到任意位置**，按需设置 `DSH_GIT_BASH_PATH`（指向你日常的 Git Bash），然后双击 `.bat`，或把 `.vbs` 的快捷方式放进"启动"文件夹。
+用法：把对应的整个目录**复制到任意位置**，按需设置 `DSH_GIT_BASH_PATH`（指向你日常的 Git Bash），然后双击 `.bat`，或把 `.vbs` 的快捷方式放进"启动"文件夹。desktop 形态还需要按安装位置设置 `DSH_DESKTOP_EXE`（详见该目录的 README）。
 
 ### 无 GUI / 手动配置
 
