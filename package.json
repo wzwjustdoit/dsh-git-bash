@@ -47,6 +47,7 @@
     "native/*.cpp",
     "native/vendor/detours",
     "scripts/build-native.mjs",
+    "scripts/web-startup",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"

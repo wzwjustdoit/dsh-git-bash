@@ -57,26 +57,65 @@ DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 
 ### `danger-full-access`
 
-该模式不经过 native guard，直接运行 Git Bash，与插件 0.1.x 的执行方式一致。
+该模式不经过 native guard，也不进入 sandbox，直接以正常权限运行 Git Bash。它使用 `DSH_GIT_BASH_PATH`（未设置专属运行时时的 `DSH_GIT_BASH_PATH_CONFINED` 不参与），与受限模式的两份运行时相互独立——见[两个运行时](#两个运行时重要)。
 
 ## 配置 Git Bash 路径
 
 插件会自动探测 Program Files、用户安装目录和 Scoop 中的 Git Bash。Web GUI 中打开 `设置 -> 插件 -> 插件配置`，展开 `Git Bash` 卡片后可以直接输入 `bash.exe` 路径，或通过 `选择 Git 安装目录` 调用系统路径选择窗口。保存后，后续 Bash 命令会立即使用新路径；恢复默认值会回到 profile 配置或自动探测结果。
 
-无 GUI 场景可以在启动 DSH 前设置 `DSH_GIT_BASH_PATH`：
+### 两个运行时（重要）
+
+插件使用**两个** Git Bash，通过两个环境变量区分：
+
+| 环境变量 | 服务的场景 | 推荐配置 |
+| --- | --- | --- |
+| `DSH_GIT_BASH_PATH` | 启动 `dsh web` 的启动脚本、以及 `danger-full-access` 模式 | 你自己日常使用的那份 Git for Windows |
+| `DSH_GIT_BASH_PATH_CONFINED` | `read-only`、`workspace-write` 模式 | 一份**独立**的 Git for Windows（如 PortableGit 解压版），专供插件使用 |
+
+**为什么必须分成两份：** `danger-full-access` 以正常（Medium）完整性运行，会让 MSYS2 在 `\BaseNamedObjects` 下创建 `msys-2.0S5-<安装路径哈希>`；受限模式的子进程被降到 Low 完整性，**无法打开**已存在的 Medium 对象。只要两份 Git 的安装路径不同，哈希就不同，两者各自创建各自的共享对象，互不干扰。若两份指向同一安装，受限模式会在 `danger-full-access` 运行期间报 `0xC0000022`。
+
+**注意事项（请务必阅读）：**
+
+1. **`DSH_GIT_BASH_PATH_CONFINED` 必须与 `DSH_GIT_BASH_PATH` 指向不同的 Git 安装。** 指向同一份会退回成"共用一份"，受限模式将不可用。
+2. **`DSH_GIT_BASH_PATH` 不要指向受限专属的那份。** 它同时服务启动脚本；若指向专属 Git，启动脚本会用专属 Git 启动 `dsh web`，反而制造冲突。
+3. **`DSH_GIT_BASH_PATH_CONFINED` 的那份 Git 建议只交给插件使用。** 不要手动打开它并保持运行，也不要用它启动 `dsh web`。
+4. 两份都可以是 Git for Windows（不必是不同版本）。
+
+未设置 `DSH_GIT_BASH_PATH_CONFINED` 时，受限模式回落到 `DSH_GIT_BASH_PATH` 与自动探测，行为与旧版本一致（但在 `danger-full-access` 与受限模式混用同一份 Git 时，可能遇到上面第 4 条描述的问题）。
+
+### 启动方式（重要）
+
+**强烈建议用本仓库提供的启动脚本启动 `dsh web`。** 原因：DSH 的 Windows ACL sandbox 需要 server 进程 token 的 default DACL 含当前用户 SID；由 `explorer.exe` / `cmd.exe` 直接派生的进程往往不含，会导致受限模式全部 `exit 125`。经 Git Bash 启动可以让 MSYS2 把 DACL 重置为含用户 SID 的标准形状。
+
+启动脚本位于 [`scripts/web-startup/`](scripts/web-startup/)：
+
+```text
+scripts/web-startup/
+├── dsh.web.startup.gitbash.vbs   # 隐藏窗口启动（推荐加入"启动"文件夹实现开机自启）
+├── dsh.web.startup.gitbash.bat   # 前台启动 / 排查问题
+└── dsh.web.startup.gitbash.sh    # 实际逻辑（由 .bat 调用）
+```
+
+用法：把 `scripts/web-startup/` 整个目录**复制到任意位置**，按需设置 `DSH_GIT_BASH_PATH`（指向你日常的 Git Bash），然后双击 `.bat`，或把 `.vbs` 的快捷方式放进"启动"文件夹。
+
+### 无 GUI / 手动配置
+
+无 GUI 场景可以在启动 DSH 前设置环境变量：
 
 ```powershell
 $env:DSH_GIT_BASH_PATH = 'D:\Apps\Git\bin\bash.exe'
+$env:DSH_GIT_BASH_PATH_CONFINED = 'D:\dsh-git-runtime\usr\bin\bash.exe'
 dsh web
 ```
 
-也可以直接在 profile 的 `cordis.patch.yml` 中为 provider 配置 `executable`：
+也可以直接在 profile 的 `cordis.patch.yml` 中为 provider 配置 `executable` 与 `confinedExecutable`：
 
 ```yaml
 - id: git-bash-shell
   name: dsh-plugin-git-bash
   config:
     executable: D:\Apps\Git\bin\bash.exe
+    confinedExecutable: D:\dsh-git-runtime\usr\bin\bash.exe
 ```
 
 ## 平台支持

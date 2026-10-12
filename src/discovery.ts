@@ -7,10 +7,17 @@ import {
 import { win32 } from "node:path";
 
 export const GIT_BASH_PATH_ENV = "DSH_GIT_BASH_PATH";
+// The dedicated runtime for the confined modes. Its MSYS named-object hash
+// must differ from the unconfined one, so a Low-integrity child can create its
+// own `\BaseNamedObjects\msys-2.0S5-<hash>` instead of opening an existing
+// Medium-labelled object (see README's "两个运行时" section).
+export const GIT_BASH_PATH_CONFINED_ENV = "DSH_GIT_BASH_PATH_CONFINED";
 
 export interface GitBashDiscoveryOptions {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  /** Environment variable naming the configured executable; defaults to {@link GIT_BASH_PATH_ENV}. */
+  envName?: string;
 }
 
 function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -103,7 +110,7 @@ export function resolveGitBashPath(
     throw new Error("git-bash: Git for Windows is supported only on Windows");
   }
 
-  const configured = executable?.trim() || envValue(env, GIT_BASH_PATH_ENV);
+  const configured = executable?.trim() || envValue(env, options.envName ?? GIT_BASH_PATH_ENV);
   if (configured) {
     const expanded = expandEnvironmentVariables(configured, env);
     const resolved = canonicalExecutable(expanded);
@@ -126,4 +133,22 @@ export function resolveGitBashPath(
       candidates.length > 0 ? `Checked: ${candidates.join(", ")}` : "No candidate paths were available.",
     ].join(" "),
   );
+}
+
+/**
+ * The validated `bash.exe` named by one environment variable, or `undefined`
+ * when that variable is unset. Unlike {@link resolveGitBashPath} this never
+ * falls back to auto-discovery, so callers can layer several variables.
+ * @param envName - environment variable to read (case-insensitively).
+ * @param options - environment/platform overrides, as for {@link resolveGitBashPath}.
+ * @returns the resolved executable, or `undefined` when the variable is unset.
+ * @throws when the variable is set but names a missing or unusable executable.
+ */
+export function configuredGitBashPath(
+  envName: string,
+  options: GitBashDiscoveryOptions = {},
+): string | undefined {
+  const env = options.env ?? process.env;
+  if (!envValue(env, envName)) return undefined;
+  return resolveGitBashPath(undefined, { ...options, envName });
 }

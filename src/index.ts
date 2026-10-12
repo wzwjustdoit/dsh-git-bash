@@ -24,9 +24,15 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveGitBashPath } from "./discovery.js";
+import { GIT_BASH_PATH_CONFINED_ENV, configuredGitBashPath, resolveGitBashPath } from "./discovery.js";
 
-export { GIT_BASH_PATH_ENV, gitBashCandidates, resolveGitBashPath } from "./discovery.js";
+export {
+  GIT_BASH_PATH_CONFINED_ENV,
+  GIT_BASH_PATH_ENV,
+  configuredGitBashPath,
+  gitBashCandidates,
+  resolveGitBashPath,
+} from "./discovery.js";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GUARD_EXECUTABLE = resolve(
@@ -77,6 +83,12 @@ function normalizeServerDefaultDacl(): boolean {
 export interface Config extends LocalBashConfig {
   // Absolute Git for Windows bash.exe path. Auto-detected when omitted.
   executable?: string;
+  // Absolute bash.exe used by the confined modes (read-only / workspace-write).
+  // Must be a DIFFERENT installation than the unconfined one, so its MSYS
+  // named-object hash differs and the Low-integrity child can create its own
+  // shared object. Blank falls back to DSH_GIT_BASH_PATH_CONFINED, then to
+  // `executable` / DSH_GIT_BASH_PATH.
+  confinedExecutable?: string;
 }
 
 const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
@@ -88,29 +100,60 @@ const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 // the object and drops the inherited `volatile` metadata, which the host needs to
 // parse a live config section (otherwise the first command fails with
 // "config.timeoutMs.get is not a function").
-export const Config = LOCAL_BASH_CONFIG.set(
-  "executable",
-  z.string()
-    .default("")
-    .role("path")
-    .description("Absolute path to Git for Windows bash.exe; blank uses automatic discovery."),
-) as z<Config>;
+export const Config = LOCAL_BASH_CONFIG
+  .set(
+    "executable",
+    z.string()
+      .default("")
+      .role("path")
+      .description("Absolute path to Git for Windows bash.exe; blank uses automatic discovery."),
+  )
+  .set(
+    "confinedExecutable",
+    z.string()
+      .default("")
+      .role("path")
+      .description(
+        "Absolute path to the bash.exe used by read-only / workspace-write; must be a"
+        + " different Git installation than `executable`. Blank falls back to"
+        + " DSH_GIT_BASH_PATH_CONFINED, then to `executable`.",
+      ),
+  ) as z<Config>;
 
-function resolveConfiguredExecutable(config: Config): string | undefined {
-  const executable = config.executable?.trim();
-  if (!executable) return undefined;
+function checkExecutableShape(executable: string): void {
   if (!GIT_BASH_EXECUTABLE_PATTERN.test(executable)) {
     throw new TypeError(
       "git-bash: executable must be an absolute Windows path ending in bash.exe",
     );
   }
+}
+
+function resolveConfiguredExecutable(config: Config): string | undefined {
+  const executable = config.executable?.trim();
+  if (!executable) return undefined;
+  checkExecutableShape(executable);
   return resolveGitBashPath(executable);
+}
+
+/**
+ * The `bash.exe` for the confined modes, or `undefined` to fall back to
+ * {@link resolveConfiguredExecutable} / auto-discovery. Order: the
+ * `confinedExecutable` field, then {@link GIT_BASH_PATH_CONFINED_ENV}.
+ */
+function resolveConfinedExecutable(config: Config): string | undefined {
+  const configured = config.confinedExecutable?.trim();
+  if (configured) {
+    checkExecutableShape(configured);
+    return resolveGitBashPath(configured);
+  }
+  return configuredGitBashPath(GIT_BASH_PATH_CONFINED_ENV);
 }
 
 function checkedCompositionConfig(config: Config): Config {
   // Blank configuration intentionally defers auto-discovery so the host still
   // composes when Git for Windows is not installed yet.
   resolveConfiguredExecutable(config);
+  resolveConfinedExecutable(config);
   return config;
 }
 
@@ -243,7 +286,7 @@ export class GitBashExecutor extends LocalBashExecutor {
   // host actually parses stays the intersected one.
   static override Config = Config as unknown as typeof LocalBashExecutor.Config;
 
-  private executableCache: { configured: string; resolved: string } | undefined;
+  private readonly executableCache = new Map<string, { configured: string; resolved: string }>();
   private readonly mode: SandboxMode;
   private readonly processFacts = new Map<ShellProcess, ProcessFacts>();
 
@@ -254,16 +297,30 @@ export class GitBashExecutor extends LocalBashExecutor {
     this.mode = ctx.sandboxPolicy.defaultMode;
   }
 
-  get executable(): string {
+  /**
+   * The bash.exe for one file-effect mode. `danger-full-access` uses the
+   * unconfined installation (`executable` / {@link GIT_BASH_PATH_ENV}); the
+   * confined modes prefer their dedicated installation (`confinedExecutable` /
+   * {@link GIT_BASH_PATH_CONFINED_ENV}) so their MSYS shared object is created
+   * fresh by the Low-integrity child rather than inherited as a Medium object.
+   * @param mode - the resolved policy mode for this execution.
+   */
+  private executableFor(mode: SandboxMode): string {
     const config = this.config as Config;
-    const configured = config.executable?.trim() ?? "";
-    if (this.executableCache?.configured === configured) {
-      return this.executableCache.resolved;
-    }
+    const confined = mode !== "danger-full-access";
+    const configured = (confined ? config.confinedExecutable : config.executable)?.trim() ?? "";
+    const cached = this.executableCache.get(mode);
+    if (cached?.configured === configured) return cached.resolved;
 
-    const resolved = resolveConfiguredExecutable(config) ?? resolveGitBashPath();
-    this.executableCache = { configured, resolved };
+    const resolved = (confined ? resolveConfinedExecutable(config) : resolveConfiguredExecutable(config))
+      ?? resolveGitBashPath();
+    this.executableCache.set(mode, { configured, resolved });
     return resolved;
+  }
+
+  /** The unconfined-mode bash.exe; kept as the public property existing tests and callers read. */
+  get executable(): string {
+    return this.executableFor("danger-full-access");
   }
 
   override get sandboxMode(): SandboxMode {
@@ -284,13 +341,13 @@ export class GitBashExecutor extends LocalBashExecutor {
     };
   }
 
-  private argv(command: string): readonly string[] {
-    return [this.executable, "--login", "-c", command];
+  private argv(mode: SandboxMode, command: string): readonly string[] {
+    return [this.executableFor(mode), "--login", "-c", command];
   }
 
   private guardedArgv(command: string, mode: ConfinedSandboxMode): readonly string[] {
     assertNativeGuard(mode);
-    return [GUARD_EXECUTABLE, "--", ...this.argv(command)];
+    return [GUARD_EXECUTABLE, "--", ...this.argv(mode, command)];
   }
 
   private policy(spec: ShellExecSpec): SandboxExecutionPolicy {
@@ -337,7 +394,7 @@ export class GitBashExecutor extends LocalBashExecutor {
       // ignore `executable` and DSH_GIT_BASH_PATH; route through the same
       // argv the confined branch builds so all three modes share one
       // resolution chain.
-      const execution = await this.executeArgv(spec, this.argv(spec.command));
+      const execution = await this.executeArgv(spec, this.argv(mode, spec.command));
       return GitBashExecutor.decorateResult(execution, (result) => ({
         ...result,
         sandbox: { mode, denied: false },
