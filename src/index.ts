@@ -332,7 +332,12 @@ export class GitBashExecutor extends LocalBashExecutor {
     const { mode } = policy;
 
     if (mode === "danger-full-access") {
-      const execution = await super.execute(spec);
+      // Unconfined, but still the configured Git Bash. The host base class
+      // hardcodes `["bash", "-c", …]` (a PATH lookup), which would silently
+      // ignore `executable` and DSH_GIT_BASH_PATH; route through the same
+      // argv the confined branch builds so all three modes share one
+      // resolution chain.
+      const execution = await this.executeArgv(spec, this.argv(spec.command));
       return GitBashExecutor.decorateResult(execution, (result) => ({
         ...result,
         sandbox: { mode, denied: false },

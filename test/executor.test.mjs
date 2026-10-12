@@ -11,7 +11,7 @@ import { Config, describeGuardFailure, GitBashExecutor, resolveGitBashPath } fro
 const LOCAL_BASH_CONFIG = LocalBashExecutor.Config;
 const CAN_RUN_NATIVE_GUARD = process.platform === "win32" && process.arch === "x64";
 
-function createExecutor(mode = "danger-full-access") {
+function createExecutor(mode = "danger-full-access", config = {}) {
   const ctx = new Context();
   const workspaceRoot = process.cwd();
   ctx.provide("sandboxPolicy", {
@@ -26,18 +26,32 @@ function createExecutor(mode = "danger-full-access") {
     runnerFailureSignatures: [],
     probeTimeoutMs: 10_000,
   });
-  const executor = new GitBashExecutor(ctx, {
+  // Parse through the plugin schema: from DSH 0.2 the local bash config is
+  // Volatile-wrapped, so a raw numeric literal would make
+  // `config.timeoutMs.get()` throw. The host parses rows through this schema
+  // too, so this mirrors the real composition path.
+  const executor = new GitBashExecutor(ctx, Config({
     timeoutMs: 15_000,
     maxTimeoutMs: 15_000,
     maxOutputBytes: 64_000,
     maxSpillBytes: 1024 * 1024,
     graceMs: 1_000,
-  });
+    ...config,
+  }));
   return { ctx, executor };
 }
 
 async function dispose(ctx) {
   await ctx.fiber.dispose();
+}
+
+// The DSH 0.2 seam: execute() returns a handle and result() settles it.
+// These keep the test intent readable while routing through the live seam.
+function run(executor, spec) {
+  return executor.execute(spec).then((execution) => execution.result());
+}
+function start(executor, spec) {
+  return executor.execute(spec);
 }
 
 test("extends the shell settings schema with a Git Bash executable", () => {
@@ -178,7 +192,7 @@ test("enriches the guard DACL failure with an actionable hint", () => {
 test("runs foreground commands directly in danger-full-access", async () => {
   const { ctx, executor } = createExecutor();
   try {
-    const result = await executor.run(executor.resolve({
+    const result = await run(executor, executor.resolve({
       command: "printf '%s|%s|%s' \"$BASH_VERSION\" \"$MSYSTEM\" \"$BASH\"",
     }));
 
@@ -196,10 +210,40 @@ test("runs foreground commands directly in danger-full-access", async () => {
   }
 });
 
+test("uses the configured executable in danger-full-access too", async () => {
+  // Regression: danger-full-access used to call the host base class, whose
+  // hardcoded argv is ["bash", "-c", …] — a PATH lookup that ignored both
+  // `executable` and DSH_GIT_BASH_PATH. Every mode must share one resolution
+  // chain; the git installation root reported by the shell proves which bash
+  // actually ran. (workspace-write shares read-only's guardedArgv path.) The
+  // confined modes are covered by the sandbox matrix below, whose expectations
+  // depend on the host's MSYS/BNO capability rather than this fix.
+  const installed = resolveGitBashPath();
+
+  for (const mode of ["danger-full-access"]) {
+    const { ctx, executor } = createExecutor(mode, { executable: installed });
+    try {
+      const spec = executor.resolve({ command: "cygpath -w /" });
+      const result = await (await executor.execute(spec)).result();
+
+      assert.equal(result.exitCode, 0, `${mode}: ${result.stderr.text}`);
+      // The MSYS root the shell reports must be the installation that owns the
+      // configured bash.exe (works for both the `bin` and `usr/bin` spellings).
+      const reported = realpathSync.native(result.stdout.text.trim()).replace(/[\\/]+$/, "").toLowerCase();
+      assert.ok(
+        realpathSync.native(installed).toLowerCase().startsWith(reported + "\\"),
+        `${mode}: reported root ${reported} does not own the configured ${installed}`,
+      );
+    } finally {
+      await dispose(ctx);
+    }
+  }
+});
+
 test("runs background commands directly through Git Bash", async () => {
   const { ctx, executor } = createExecutor();
   try {
-    const process = await executor.start(executor.resolve({
+    const process = await start(executor, executor.resolve({
       command: "printf '%s' \"$MSYSTEM\"",
     }));
     await process.done;
@@ -217,7 +261,7 @@ test("runs background commands directly through Git Bash", async () => {
 test("runs Git Bash and nested MSYS children under read-only", { skip: !CAN_RUN_NATIVE_GUARD }, async () => {
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const result = await executor.run(executor.resolve({
+    const result = await run(executor, executor.resolve({
       command: "printf 'root|'; bash --noprofile --norc -c 'printf nested'; printf '|'; git --version",
     }));
 
@@ -238,7 +282,7 @@ test("read-only denies workspace writes", { skip: !CAN_RUN_NATIVE_GUARD }, async
   rmSync(probe, { force: true });
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const result = await executor.run(executor.resolve({
+    const result = await run(executor, executor.resolve({
       command: "printf blocked > " + probe,
     }));
 
@@ -263,7 +307,7 @@ test("workspace-write allows workspace writes and denies sibling writes", { skip
   rmSync(outside, { force: true });
   const { ctx, executor } = createExecutor("workspace-write");
   try {
-    const allowed = await executor.run(executor.resolve({
+    const allowed = await run(executor, executor.resolve({
       command: "printf allowed > " + inside + " && cat " + inside,
     }));
     assert.equal(allowed.exitCode, 0, allowed.stderr.text);
@@ -275,7 +319,7 @@ test("workspace-write allows workspace writes and denies sibling writes", { skip
       enforcement: "partial",
     });
 
-    const denied = await executor.run(executor.resolve({
+    const denied = await run(executor, executor.resolve({
       command: "printf blocked > " + outside,
     }));
     assert.notEqual(denied.exitCode, 0);
@@ -296,7 +340,7 @@ test("workspace-write allows workspace writes and denies sibling writes", { skip
 test("reports sandbox facts for restricted background processes", { skip: !CAN_RUN_NATIVE_GUARD }, async () => {
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const process = await executor.start(executor.resolve({
+    const process = await start(executor, executor.resolve({
       command: "printf guarded-background",
     }));
     await process.done;
@@ -321,7 +365,7 @@ test("reports sandbox facts for restricted background processes", { skip: !CAN_R
 test("preserves restricted token invariants in native descendants", { skip: !CAN_RUN_NATIVE_GUARD }, async () => {
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const result = await executor.run(executor.resolve({
+    const result = await run(executor, executor.resolve({
       command: "./native/bin/win32-x64/msys-token-guard.exe --probe-current-token",
     }));
 
@@ -341,7 +385,7 @@ test("times out the complete restricted process tree", { skip: !CAN_RUN_NATIVE_G
   const { ctx, executor } = createExecutor("read-only");
   const started = Date.now();
   try {
-    const result = await executor.run(executor.resolve({
+    const result = await run(executor, executor.resolve({
       command: "sleep 10",
       timeoutMs: 200,
     }));
@@ -365,7 +409,7 @@ test("aborts the complete restricted foreground process tree", { skip: !CAN_RUN_
   const timer = setTimeout(() => controller.abort(), 200);
   const started = Date.now();
   try {
-    const result = await executor.run(executor.resolve({
+    const result = await run(executor, executor.resolve({
       command: "sleep 10",
       signal: controller.signal,
     }));
@@ -387,7 +431,7 @@ test("aborts the complete restricted foreground process tree", { skip: !CAN_RUN_
 test("kills the complete restricted background process tree", { skip: !CAN_RUN_NATIVE_GUARD }, async () => {
   const { ctx, executor } = createExecutor("read-only");
   try {
-    const process = await executor.start(executor.resolve({ command: "sleep 10" }));
+    const process = await start(executor, executor.resolve({ command: "sleep 10" }));
     assert.equal(process.status, "running");
     assert.equal(process.kill(), true);
     await process.done;
