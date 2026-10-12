@@ -32,9 +32,21 @@ function createReactRuntime() {
     },
     render(component, props) {
       cursor = 0;
-      return component(props);
+      return expand(component(props));
     },
   };
+
+  // The card composes a function component per path field, which is how React
+  // renders too. Expand those in place so findElement sees the real element
+  // tree, exactly as it did when the field markup was inline.
+  function expand(node) {
+    if (typeof node !== "object" || node === null) return node;
+    if (typeof node.type === "function") return expand(node.type(node.props));
+    if (Array.isArray(node.children)) {
+      node.children = node.children.map((child) => expand(child));
+    }
+    return node;
+  }
 }
 
 function loadClient(document, runtime = createReactRuntime()) {
@@ -139,6 +151,11 @@ function registerCompatRow(plugin, options = {}) {
       const dispose = callback();
       if (typeof dispose === "function") effects.push(dispose);
       return dispose;
+    },
+    // DSH 0.2 removed the `settingsScope` service from inject; the bundle now
+    // probes for it at runtime with ctx.get(...). Mirror that surface.
+    get(name) {
+      return name === "settingsScope" ? ctx.settingsScope : undefined;
     },
     locale: {
       bind(namespace) {
@@ -257,7 +274,6 @@ test("client bundle registers a higher-priority Bash row wrapper", () => {
   assert.deepEqual(json(plugin.inject), [
     "slots",
     "locale",
-    "settingsScope",
     "connection",
     "remote",
     "uiWorkspace",

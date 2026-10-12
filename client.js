@@ -89,7 +89,6 @@ window.__ModuleLoader__.load({
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.dgb-settings-pending,
 .dgb-settings-overridden {
   flex: none;
   padding: 1px 8px;
@@ -225,13 +224,12 @@ window.__ModuleLoader__.load({
 .dgb-settings-error {
   color: var(--dsw-alias-state-error-primary);
 }
-.dgb-settings-footer {
+.dgb-settings-field-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding: 8px 0 4px;
 }
 .dgb-settings-message {
   min-width: 0;
@@ -240,9 +238,6 @@ window.__ModuleLoader__.load({
 @media (max-width: 560px) {
   .dgb-settings-header {
     align-items: flex-start;
-  }
-  .dgb-settings-pending {
-    display: none;
   }
   .dgb-settings-input-row {
     align-items: stretch;
@@ -339,13 +334,15 @@ window.__ModuleLoader__.load({
     const settingsLocales = {
       en: {
         title: "Git Bash",
-        description: "Select the Git for Windows shell used by Bash commands.",
+        description: "Select the Git for Windows used by Bash commands: one for the startup script and danger-full-access, one for the confined modes.",
         unsaved: "Unsaved",
         overridden: "Overridden",
         reset: "Reset to default",
         readOnly: "This deployment stores settings read-only.",
-        pathLabel: "Git Bash executable",
+        pathLabel: "Git Bash executable (startup script / danger-full-access)",
         pathHint: "Leave blank to auto-detect Git for Windows. The path must point to bash.exe.",
+        confinedPathLabel: "Git Bash executable (read-only / workspace-write)",
+        confinedPathHint: "Use a DIFFERENT Git installation than the one above. Leave blank to fall back to the same one.",
         invalidPath: "Enter an absolute Windows path ending in bash.exe, or leave it blank.",
         browse: "Select Git installation folder",
         browsing: "Selecting...",
@@ -358,13 +355,15 @@ window.__ModuleLoader__.load({
       },
       zh: {
         title: "Git Bash",
-        description: "选择 Bash 命令使用的 Git for Windows 终端。",
+        description: "选择 Bash 命令使用的 Git for Windows：一份给启动脚本与 danger-full-access，另一份给受限模式。",
         unsaved: "未保存",
         overridden: "已覆盖",
         reset: "恢复默认",
         readOnly: "本部署的设置为只读。",
-        pathLabel: "Git Bash 可执行文件",
+        pathLabel: "Git Bash 可执行文件（启动脚本 / danger-full-access）",
         pathHint: "留空会自动探测 Git for Windows；路径必须指向 bash.exe。",
+        confinedPathLabel: "Git Bash 可执行文件（read-only / workspace-write）",
+        confinedPathHint: "请使用与上一项【不同】的 Git 安装；留空则回落到同一份。",
         invalidPath: "请输入以 bash.exe 结尾的 Windows 绝对路径，或留空自动探测。",
         browse: "选择 Git 安装目录",
         browsing: "选择中...",
@@ -401,27 +400,27 @@ window.__ModuleLoader__.load({
       return appendWindowsPath(normalized, "bin\\bash.exe");
     }
 
-    function executableOf(value) {
-      return typeof value?.executable === "string" ? value.executable : "";
+    function fieldOf(value, field) {
+      return typeof value?.[field] === "string" ? value[field] : "";
     }
 
-    function GitBashSettingsCard(props) {
-      const { scope, pickDirectory, t } = props;
+    // One path field: label, input, native folder picker, per-field override
+    // badge and reset. Both `executable` and `confinedExecutable` share it, so
+    // they stay consistent without duplicating the interaction logic.
+    function GitBashPathField(props) {
+      const { field, idBase, label, hint, invalidHint, placeholder, scope, pickDirectory, t, busy } = props;
       const snapshot = useSyncExternalStore(
         (listener) => scope.subscribe(listener),
         () => scope.getSnapshot(),
         () => scope.getSnapshot(),
       );
-      const effective = executableOf(snapshot.value);
-      const inherited = executableOf(snapshot.base);
-      const supported = snapshot.status === "ready" && hasOwn(snapshot.value, "executable");
-      const overridden = hasOwn(snapshot.user, "executable");
-      const writable = supported && snapshot.writable;
-      const [open, setOpen] = useState(false);
+      const effective = fieldOf(snapshot.value, field);
+      const inherited = fieldOf(snapshot.base, field);
+      const overridden = hasOwn(snapshot.user, field);
+      const writable = props.writable;
       const [text, setText] = useState(effective);
       const [dirty, setDirty] = useState(false);
       const [resetPending, setResetPending] = useState(false);
-      const [saving, setSaving] = useState(false);
       const [picking, setPicking] = useState(false);
       const [message, setMessage] = useState("");
 
@@ -430,13 +429,11 @@ window.__ModuleLoader__.load({
         setText(effective);
       }, [dirty, effective, snapshot.revision]);
 
-      if (!supported) return null;
-
       const trimmed = text.trim();
       const willUnset = resetPending || trimmed === "";
       const invalid = !willUnset && !isGitBashExecutablePath(trimmed);
       const previewOverridden = dirty ? !willUnset : overridden;
-      const busy = saving || picking;
+      const fieldBusy = busy || picking;
 
       const edit = (value) => {
         setText(value);
@@ -469,31 +466,118 @@ window.__ModuleLoader__.load({
         }
       };
       const save = async () => {
-        if (!dirty || invalid || !writable || saving) return;
-        setSaving(true);
+        if (!dirty || invalid || !writable) return;
         setMessage("");
         try {
-          if (willUnset) await scope.unset("executable");
-          else await scope.set("executable", trimmed);
+          if (willUnset) await scope.unset(field);
+          else await scope.set(field, trimmed);
 
           const latest = scope.getSnapshot();
           const accepted = willUnset
-            ? !hasOwn(latest.user, "executable")
-            : hasOwn(latest.user, "executable") && latest.user.executable === trimmed;
+            ? !hasOwn(latest.user, field)
+            : hasOwn(latest.user, field) && latest.user[field] === trimmed;
           if (!accepted) {
             setMessage(t("saveFailed"));
             return;
           }
 
-          setText(executableOf(latest.value));
+          setText(fieldOf(latest.value, field));
           setDirty(false);
           setResetPending(false);
         } catch {
           setMessage(t("saveFailed"));
-        } finally {
-          setSaving(false);
         }
       };
+
+      const inputId = "plugin-config-git-bash-" + idBase;
+      const hintId = inputId + "-hint";
+
+      return createElement("div", { className: "dgb-settings-field" },
+        createElement("div", { className: "dgb-settings-field-head" },
+          createElement("label", {
+            className: "dgb-settings-label",
+            htmlFor: inputId,
+          }, t(label)),
+          previewOverridden ? createElement("span", { className: "dgb-settings-field-actions" },
+            createElement("span", { className: "dgb-settings-overridden" }, t("overridden")),
+            createElement("button", {
+              type: "button",
+              className: "dgb-settings-reset",
+              disabled: !writable || fieldBusy,
+              onClick: reset,
+            }, t("reset")),
+          ) : null,
+        ),
+        createElement("div", { className: "dgb-settings-input-row" },
+          createElement("input", {
+            id: inputId,
+            className: "dgb-settings-input",
+            type: "text",
+            autoComplete: "off",
+            spellCheck: false,
+            value: text,
+            placeholder,
+            disabled: !writable || fieldBusy,
+            "aria-describedby": hintId,
+            ...(invalid ? {
+              "aria-invalid": true,
+              "aria-errormessage": hintId,
+            } : {}),
+            onChange: (event) => edit(event.target.value),
+          }),
+          createElement("button", {
+            type: "button",
+            className: "dgb-settings-button dgb-settings-picker",
+            title: t("browseTitle"),
+            disabled: !writable || fieldBusy,
+            onClick: browse,
+          },
+          createElement(IconFolderOpenOutline16, {}),
+          t(picking ? "browsing" : "browse")),
+        ),
+        createElement("p", {
+          id: hintId,
+          className: invalid ? "dgb-settings-hint dgb-settings-error" : "dgb-settings-hint",
+          ...(invalid ? { role: "alert" } : {}),
+        }, t(invalid ? invalidHint : hint)),
+        createElement("div", { className: "dgb-settings-field-footer" },
+          message ? createElement("p", {
+            className: "dgb-settings-message dgb-settings-error",
+            role: "status",
+          }, message) : null,
+          createElement("button", {
+            type: "button",
+            className: "dgb-settings-button",
+            disabled: !dirty || fieldBusy,
+            onClick: discard,
+          }, t("discard")),
+          createElement("button", {
+            type: "button",
+            className: "dgb-settings-button dgb-settings-button-primary",
+            disabled: !dirty || invalid || !writable || fieldBusy,
+            onClick: save,
+          }, t("save")),
+        ),
+      );
+    }
+
+    function GitBashSettingsCard(props) {
+      const { scope, pickDirectory, t } = props;
+      const snapshot = useSyncExternalStore(
+        (listener) => scope.subscribe(listener),
+        () => scope.getSnapshot(),
+        () => scope.getSnapshot(),
+      );
+      // Gate on `executable` alone: it predates `confinedExecutable`, so an
+      // older host schema (without the new field) still renders the first
+      // field rather than hiding the whole card.
+      const supported = snapshot.status === "ready" && hasOwn(snapshot.value, "executable");
+      const writable = supported && snapshot.writable;
+      const [open, setOpen] = useState(false);
+
+      if (!supported) return null;
+
+      const fieldProps = { scope, pickDirectory, t, writable };
 
       return createElement("li", {
         "data-dsh-git-bash-settings": "",
@@ -509,7 +593,6 @@ window.__ModuleLoader__.load({
         createElement("span", { className: "dgb-settings-title" }, t("title")),
         createElement("span", { className: "dgb-settings-description" }, t("description")),
       ),
-      dirty ? createElement("span", { className: "dgb-settings-pending" }, t("unsaved")) : null,
       createElement(IconChevronDownOutline14, {
         className: open
           ? "dgb-settings-chevron dgb-settings-chevron-open"
@@ -520,73 +603,24 @@ window.__ModuleLoader__.load({
           className: "dgb-settings-readonly",
           role: "status",
         }, t("readOnly")) : null,
-        createElement("div", { className: "dgb-settings-field" },
-          createElement("div", { className: "dgb-settings-field-head" },
-            createElement("label", {
-              className: "dgb-settings-label",
-              htmlFor: "plugin-config-git-bash-executable",
-            }, t("pathLabel")),
-            previewOverridden ? createElement("span", { className: "dgb-settings-field-actions" },
-              createElement("span", { className: "dgb-settings-overridden" }, t("overridden")),
-              createElement("button", {
-                type: "button",
-                className: "dgb-settings-reset",
-                disabled: !writable || busy,
-                onClick: reset,
-              }, t("reset")),
-            ) : null,
-          ),
-          createElement("div", { className: "dgb-settings-input-row" },
-            createElement("input", {
-              id: "plugin-config-git-bash-executable",
-              className: "dgb-settings-input",
-              type: "text",
-              autoComplete: "off",
-              spellCheck: false,
-              value: text,
-              placeholder: "C:\\Program Files\\Git\\bin\\bash.exe",
-              disabled: !writable || busy,
-              "aria-describedby": "plugin-config-git-bash-executable-hint",
-              ...(invalid ? {
-                "aria-invalid": true,
-                "aria-errormessage": "plugin-config-git-bash-executable-hint",
-              } : {}),
-              onChange: (event) => edit(event.target.value),
-            }),
-            createElement("button", {
-              type: "button",
-              className: "dgb-settings-button dgb-settings-picker",
-              title: t("browseTitle"),
-              disabled: !writable || busy,
-              onClick: browse,
-            },
-            createElement(IconFolderOpenOutline16, {}),
-            t(picking ? "browsing" : "browse")),
-          ),
-          createElement("p", {
-            id: "plugin-config-git-bash-executable-hint",
-            className: invalid ? "dgb-settings-hint dgb-settings-error" : "dgb-settings-hint",
-            ...(invalid ? { role: "alert" } : {}),
-          }, t(invalid ? "invalidPath" : "pathHint")),
-        ),
-        createElement("div", { className: "dgb-settings-footer" },
-          message ? createElement("p", {
-            className: "dgb-settings-message dgb-settings-error",
-            role: "status",
-          }, message) : null,
-          createElement("button", {
-            type: "button",
-            className: "dgb-settings-button",
-            disabled: !dirty || busy,
-            onClick: discard,
-          }, t("discard")),
-          createElement("button", {
-            type: "button",
-            className: "dgb-settings-button dgb-settings-button-primary",
-            disabled: !dirty || invalid || !writable || busy,
-            onClick: save,
-          }, t(saving ? "saving" : "save")),
-        ),
+        createElement(GitBashPathField, {
+          ...fieldProps,
+          field: "executable",
+          idBase: "executable",
+          label: "pathLabel",
+          hint: "pathHint",
+          invalidHint: "invalidPath",
+          placeholder: "C:\\Program Files\\Git\\bin\\bash.exe",
+        }),
+        createElement(GitBashPathField, {
+          ...fieldProps,
+          field: "confinedExecutable",
+          idBase: "confined-executable",
+          label: "confinedPathLabel",
+          hint: "confinedPathHint",
+          invalidHint: "invalidPath",
+          placeholder: "D:\\PortableGit\\usr\\bin\\bash.exe",
+        }),
       ) : null);
     }
 

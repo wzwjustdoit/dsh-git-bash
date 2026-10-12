@@ -34,5 +34,5 @@ msys-token-guard: OpenProcessToken(child default DACL) failed (Win32 5)
 
 ## 注意
 
-- 这份脚本使用的 Git 应与插件 `danger-full-access` 用的那份一致（即 `DSH_GIT_BASH_PATH`）；**不要**把它指向 `DSH_GIT_BASH_PATH_CONFINED` 的专属 Git。
+- 这份脚本使用的 Git 应与插件 `danger-full-access` 用的那份一致（即 `DSH_GIT_BASH_PATH`）；**不要**把它指向 `DSH_GIT_BASH_PATH_CONFINED` 的那份。
 - 脚本不包含任何个人化配置；如需额外的 `PATH` / 证书 / 代理设置，请自行在本机环境中配置。

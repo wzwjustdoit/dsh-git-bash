@@ -57,31 +57,31 @@ DSH ACL runner -> msys-token-guard.exe -> bash.exe -> child processes
 
 ### `danger-full-access`
 
-该模式不经过 native guard，也不进入 sandbox，直接以正常权限运行 Git Bash。它使用 `DSH_GIT_BASH_PATH`（未设置专属运行时时的 `DSH_GIT_BASH_PATH_CONFINED` 不参与），与受限模式的两份运行时相互独立——见[两个运行时](#两个运行时重要)。
+该模式不经过 native guard，也不进入 sandbox，直接以正常权限运行 Git Bash。它使用 `DSH_GIT_BASH_PATH`（不读取 `DSH_GIT_BASH_PATH_CONFINED`）——见[两个环境变量的分工](#两个环境变量的分工重要)。
 
 ## 配置 Git Bash 路径
 
 插件会自动探测 Program Files、用户安装目录和 Scoop 中的 Git Bash。Web GUI 中打开 `设置 -> 插件 -> 插件配置`，展开 `Git Bash` 卡片后可以直接输入 `bash.exe` 路径，或通过 `选择 Git 安装目录` 调用系统路径选择窗口。保存后，后续 Bash 命令会立即使用新路径；恢复默认值会回到 profile 配置或自动探测结果。
 
-### 两个运行时（重要）
+### 两个环境变量的分工（重要）
 
-插件使用**两个** Git Bash，通过两个环境变量区分：
+插件按用途读取两个环境变量，各指向一份 Git Bash：
 
 | 环境变量 | 服务的场景 | 推荐配置 |
 | --- | --- | --- |
 | `DSH_GIT_BASH_PATH` | 启动 `dsh web` 的启动脚本、以及 `danger-full-access` 模式 | 你自己日常使用的那份 Git for Windows |
-| `DSH_GIT_BASH_PATH_CONFINED` | `read-only`、`workspace-write` 模式 | 一份**独立**的 Git for Windows（如 PortableGit 解压版），专供插件使用 |
+| `DSH_GIT_BASH_PATH_CONFINED` | `read-only`、`workspace-write` 模式 | 另一份**单独**的 Git for Windows（如 PortableGit 解压版），只用于受限模式 |
 
-**为什么必须分成两份：** `danger-full-access` 以正常（Medium）完整性运行，会让 MSYS2 在 `\BaseNamedObjects` 下创建 `msys-2.0S5-<安装路径哈希>`；受限模式的子进程被降到 Low 完整性，**无法打开**已存在的 Medium 对象。只要两份 Git 的安装路径不同，哈希就不同，两者各自创建各自的共享对象，互不干扰。若两份指向同一安装，受限模式会在 `danger-full-access` 运行期间报 `0xC0000022`。
+**为什么受限模式要用另一份：** `danger-full-access` 以正常（Medium）完整性运行，会让 MSYS2 在 `\BaseNamedObjects` 下创建 `msys-2.0S5-<安装路径哈希>`；受限模式的子进程被降到 Low 完整性，**无法打开**已存在的 Medium 对象。只要两份 Git 的安装路径不同，哈希就不同，两者各自创建各自的共享对象，互不干扰。若两份指向同一安装，受限模式会在 `danger-full-access` 运行期间报 `0xC0000022`。
 
 **注意事项（请务必阅读）：**
 
 1. **`DSH_GIT_BASH_PATH_CONFINED` 必须与 `DSH_GIT_BASH_PATH` 指向不同的 Git 安装。** 指向同一份会退回成"共用一份"，受限模式将不可用。
-2. **`DSH_GIT_BASH_PATH` 不要指向受限专属的那份。** 它同时服务启动脚本；若指向专属 Git，启动脚本会用专属 Git 启动 `dsh web`，反而制造冲突。
-3. **`DSH_GIT_BASH_PATH_CONFINED` 的那份 Git 建议只交给插件使用。** 不要手动打开它并保持运行，也不要用它启动 `dsh web`。
+2. **`DSH_GIT_BASH_PATH` 不要指向 `DSH_GIT_BASH_PATH_CONFINED` 的那份。** 它同时服务启动脚本；若指向同一份，启动脚本会用受限模式的那份 Git 启动 `dsh web`，反而制造冲突。
+3. **`DSH_GIT_BASH_PATH_CONFINED` 的那份 Git 建议只由插件使用。** 不要手动打开它并保持运行，也不要用它启动 `dsh web`。
 4. 两份都可以是 Git for Windows（不必是不同版本）。
 
-未设置 `DSH_GIT_BASH_PATH_CONFINED` 时，受限模式回落到 `DSH_GIT_BASH_PATH` 与自动探测，行为与旧版本一致（但在 `danger-full-access` 与受限模式混用同一份 Git 时，可能遇到上面第 4 条描述的问题）。
+未设置 `DSH_GIT_BASH_PATH_CONFINED` 时，受限模式回落到 `DSH_GIT_BASH_PATH` 与自动探测，行为与旧版本一致（但在 `danger-full-access` 与受限模式混用同一份 Git 时，可能遇到上面描述的问题）。
 
 ### 启动方式（重要）
 
