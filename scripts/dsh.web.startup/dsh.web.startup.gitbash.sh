@@ -17,12 +17,10 @@
 #   MSYS2 运行时在 bash.exe 启动时, 会把自己的 token default DACL 重置为含用户
 #   SID 的标准形状 [用户 ALL, Administrators ALL, SYSTEM ALL]。凡是从 bash 派生的
 #   进程都继承这个形状, 沙箱随即恢复正常。
-#   详见 https://github.com/inmny/dsh-git-bash 的 README "启动方式" 一节。
+#   详见 https://github.com/wzwjustdoit/dsh-git-bash 的 README "启动方式" 一节。
 #
 # 【用法】
 #   双击同目录的 dsh.web.startup.gitbash.bat 或 dsh.web.startup.gitbash.vbs
-#   临时换端口: dsh.web.startup.gitbash.bat 1690
-#   默认端口 1688, 可用 DSH_WEB_PORT 覆盖
 #
 # =============================================================================
 

@@ -17,12 +17,10 @@
 #   MSYS2 运行时在 bash.exe 启动时, 会把自己的 token default DACL 重置为含用户
 #   SID 的标准形状 [用户 ALL, Administrators ALL, SYSTEM ALL]。凡是从 bash 派生的
 #   进程都继承这个形状, 沙箱随即恢复正常。
-#   因此: 必须让 Desktop 可执行文件的祖先链上出现 Git Bash。
-#   详见 https://github.com/inmny/dsh-git-bash 的 README "启动方式" 一节。
+#   详见 https://github.com/wzwjustdoit/dsh-git-bash 的 README "启动方式" 一节。
 #
 # 【用法】
 #   双击同目录的 dsh.desktop.startup.gitbash.bat 或 dsh.desktop.startup.gitbash.vbs
-#   想换 Desktop 安装位置: 直接修改本文件特定行,或者 设置环境变量 DSH_DESKTOP_EXE 指向 "DeepSeek Harness.exe" (绝对路径)
 #
 # =============================================================================
 
@@ -38,14 +36,11 @@ echo "[dsh.desktop.startup.gitbash.sh]  desktop exe       = $DSH_DESKTOP_EXE"
 echo "[dsh.desktop.startup.gitbash.sh]  cwd               = $PWD"
 
 if [ ! -f "$DSH_DESKTOP_EXE" ]; then
-    echo "[dsh.desktop.startup.gitbash.sh]  Desktop EXE Not Found: $DSH_DESKTOP_EXE" >&2
+    echo "[dsh.desktop.startup.gitbash.sh]  DeepSeek Harness Desktop EXE Not Found: $DSH_DESKTOP_EXE" >&2
     exit 1
 fi
 
 # =============================================================================
 # 启动命令
-#
-# exec 让 Electron 主进程直接取代 bash —— 宿主进程因此继承这个已被 MSYS2
-# 归一化过 token 的进程, 受限模式下的沙箱恢复正常。
 # =============================================================================
 exec "$DSH_DESKTOP_EXE"
