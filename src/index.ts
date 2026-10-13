@@ -219,7 +219,7 @@ export function describeGuardFailure(detail: string): string {
   return detail + " (git-bash: the DSH server process token's default DACL lacks the user SID,"
     + " so the guard cannot prepare the restricted child token. Start `dsh web` from Git Bash"
     + " so MSYS2 restores the standard DACL shape, and see"
-    + " https://github.com/inmny/dsh-git-bash/issues/4)";
+    + " https://github.com/wzwjustdoit/dsh-git-bash/issues/4)";
 }
 
 function classifyRunnerFailure(

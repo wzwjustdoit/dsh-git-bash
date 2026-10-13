@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: "dsh-plugin-git-bash",
+  id: "@wzwjustdoit/dsh-plugin-git-bash",
   factory: (require) => {
     const module = { exports: {} };
     const {

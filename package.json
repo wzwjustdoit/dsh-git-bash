@@ -1,6 +1,6 @@
 {
-  "name": "dsh-plugin-git-bash",
-  "version": "0.3.3",
+  "name": "@wzwjustdoit/dsh-plugin-git-bash",
+  "version": "0.4.0",
   "description": "Use Git for Windows Bash as the default DSH shell with restricted-mode support",
   "keywords": [
     "deepseek-harness",
@@ -10,13 +10,13 @@
     "sandbox",
     "windows"
   ],
-  "homepage": "https://github.com/inmny/dsh-git-bash#readme",
+  "homepage": "https://github.com/wzwjustdoit/dsh-git-bash#readme",
   "bugs": {
-    "url": "https://github.com/inmny/dsh-git-bash/issues"
+    "url": "https://github.com/wzwjustdoit/dsh-git-bash/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/inmny/dsh-git-bash.git"
+    "url": "git+https://github.com/wzwjustdoit/dsh-git-bash.git"
   },
   "type": "module",
   "main": "lib/index.js",
